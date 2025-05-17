@@ -1,88 +1,112 @@
 import pandas as pd
+import numpy as np
 import re
-import string
-from sklearn.feature_extraction.text import TfidfVectorizer
+import nltk
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+
 from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
 
-# Step 1: Sample dataset with headlines and full article content
-data = {
-    'headline': [
-        "NASA successfully lands spacecraft on Mars",
-        "World Health Organization declares end of pandemic",
-        "UN signs historic climate change agreement",
-        "Electric vehicle sales hit record high this year",
-        "Scientists discover new planet in our solar system",
-        "Aliens spotted in White House basement",
-        "Drinking bleach cures COVID-19, says study",
-        "Time traveler arrested in New York for future crimes",
-        "Vampires confirmed to exist by NASA insider",
-        "Government replaces birds with drones to spy on citizens"
-    ],
-    'article': [
-        "NASA's latest mission to Mars successfully landed with new technology, confirming data transmission from the surface.",
-        "The WHO has officially ended the pandemic status after global vaccinations proved effective in containing the virus.",
-        "The United Nations has reached a groundbreaking agreement on limiting carbon emissions to fight climate change.",
-        "A new report shows electric vehicle sales have reached an all-time high, especially in Europe and Asia.",
-        "Astronomers using advanced telescopes discovered a new celestial body orbiting beyond Neptune.",
-        "A conspiracy theory claims aliens live in the basement of the White House; no evidence has been provided.",
-        "An unverified study circulating online falsely claims that bleach can cure COVID-19, which experts deny.",
-        "A man claiming to be from the year 3021 was arrested in New York for predicting several events correctly.",
-        "A hoax article claims that NASA admitted the existence of vampires after a leaked video appeared online.",
-        "According to an internet rumor, birds are not real and have been replaced by surveillance drones by the government."
-    ],
-    'label': [1, 1, 1, 1, 1,   # Real
-              0, 0, 0, 0, 0]   # Fake
-}
+# Ensure necessary downloads
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
 
-# Step 2: Create a DataFrame
-df = pd.DataFrame(data)
+# 1. Load Data
+def load_data():
+    fake = pd.read_csv('Fake.csv')
+    true = pd.read_csv('True.csv')
 
-# Step 3: Preprocess the text
+    fake['label'] = 0
+    true['label'] = 1
+
+    data = pd.concat([fake, true], ignore_index=True)
+    data = data[['title', 'text', 'label']]
+    data.dropna(inplace=True)
+
+    return data
+
+# 2. Clean Text
 def clean_text(text):
     text = text.lower()
-    text = re.sub(r'.*?', '', text)
-    text = re.sub(r'https?://\S+|www\.\S+', '', text)
-    text = re.sub(r'<.*?>+', '', text)
-    text = re.sub(r'[%s]' % re.escape(string.punctuation), '', text)
-    text = re.sub(r'\n', '', text)
-    text = re.sub(r'\w*\d\w*', '', text)
-    return text
+    text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)
+    text = re.sub(r'\@w+|\#','', text)
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
 
-df['text'] = df['headline'] + " " + df['article']
-df['text'] = df['text'].apply(clean_text)
+    tokens = word_tokenize(text)
+    stop_words = set(stopwords.words('english'))
+    lemmatizer = WordNetLemmatizer()
 
-# Step 4: NLP Vectorization
-vectorizer = TfidfVectorizer()
-X = vectorizer.fit_transform(df['text'])
-y = df['label']
+    cleaned_tokens = [lemmatizer.lemmatize(w) for w in tokens if w not in stop_words]
+    return ' '.join(cleaned_tokens)
 
-# Step 5: Train/Test Split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# 3. Preprocess
+def preprocess(data):
+    data['text'] = data['text'].apply(clean_text)
+    return data
 
-# Step 6: Train the model
-model = LogisticRegression()
-model.fit(X_train, y_train)
+# 4. Feature Extraction
+def extract_features(data):
+    vectorizer = TfidfVectorizer(max_features=5000)
+    X = vectorizer.fit_transform(data['text'])
+    y = data['label']
+    return X, y, vectorizer
 
-# Step 7: Evaluate
-y_pred = model.predict(X_test)
-print("Model Accuracy:", accuracy_score(y_test, y_pred))
-print("Classification Report:\n", classification_report(y_test, y_pred))
+# 5. Train Models
+def train_models(X_train, y_train):
+    models = {
+        'Logistic Regression': LogisticRegression(max_iter=1000),
+        'Naive Bayes': MultinomialNB(),
+        'Random Forest': RandomForestClassifier()
+    }
 
-# Step 8: Predict user input
-def predict_news(headline, article):
-    combined = clean_text(headline + " " + article)
-    vec = vectorizer.transform([combined])
-    result = model.predict(vec)[0]
-    return "REAL NEWS" if result == 1 else "FAKE NEWS"
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+    return models
 
-# Step 9: Get user input
-print("\n--- News Input ---")
-user_headline = input("Enter the news headline: ")
-user_article = input("Enter the full article content: ")
+# 6. Evaluate Models
+def evaluate_models(models, X_test, y_test):
+    for name, model in models.items():
+        print(f"\n{name} Results:")
+        y_pred = model.predict(X_test)
+        print(confusion_matrix(y_test, y_pred))
+        print(classification_report(y_test, y_pred))
 
-# Step 10: Show result
-print("\n--- Analysis Result ---")
-prediction = predict_news(user_headline, user_article)
-print(f"The system detected this as: {prediction}")
+# 7. Predict Custom Input
+def predict_news(model, vectorizer, input_text, threshold=0.8):
+    cleaned = clean_text(input_text)
+    vector = vectorizer.transform([cleaned])
+    prob = model.predict_proba(vector)[0][1]  # Probability of REAL
+
+    print(f"\nInput: {input_text}")
+    print(f"Probability of REAL: {prob:.2f}")
+    if prob > threshold:
+        print("Prediction: REAL")
+    else:
+        print("Prediction: FAKE")
+
+# 8. Main
+def main():
+    data = load_data()
+    data = preprocess(data)
+    X, y, vectorizer = extract_features(data)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    models = train_models(X_train, y_train)
+    evaluate_models(models, X_test, y_test)
+
+    # Use the best model for prediction (e.g., Logistic Regression)
+    while True:
+        user_input = input("\nEnter a news article (or type 'exit' to quit):\n")
+        if user_input.lower() == 'exit':
+            break
+        predict_news(models['Logistic Regression'], vectorizer, user_input)
